@@ -1,0 +1,62 @@
+---
+title: "CherryTreePredictionReport"
+author: "Devin Arrants"
+date: "2/28/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(rnoaa)
+library(tidyverse)
+cherry <- read_csv("data/washingtondc.csv", col_types="cdddiDi") %>% 
+  bind_rows(read_csv("data/liestal.csv")) %>% 
+  bind_rows(read_csv("data/kyoto.csv"))
+
+options(noaakey = "NJxCCVZdtsfRurSAbUqXZBDOtWsSkoQK")
+
+locationIDs <- c("CITY:US000001", "CITY:SZ000001", "CITY:JA000008")
+```
+
+```{r, include=FALSE}
+cherry_df <- data.frame(location = cherry$location, latitude = cherry$lat, longitude = cherry$long, year = cherry$year, altitude = cherry$alt, bloom_doy = cherry$bloom_doy)%>% filter(year>1960, year < 2022)
+```
+```{r}
+out <-ncdc(datasetid="GSOY", datatypeid=c("TMAX","EMXP", "DX90", "DX32", "PRCP"), locationid="CITY:US000001", startdate="2004-01-01", enddate="2005-02-01", add_units = TRUE)
+kyoto <- out$data[,1:4]
+grouped_kyoto <- kyoto %>% group_by(date, datatype) %>% summarise(max = max(value, na.rm=TRUE))
+tst <- grouped_kyoto[grouped_kyoto$datatype == "TMAX",3]
+
+```
+```{r}
+cherry_df[,c("TMAX","EMXP", "DX90", "DX32", "PRCP")] = NA
+
+for(row in 1:nrow(cherry_df)){
+  year <- cherry_df[row,4]
+  locId = "CITY:US000001"
+  if(cherry_df[row,1] == "kyoto"){
+    locId = "CITY:JA000008"
+  }
+  if(cherry_df[row,1] == "liestal"){
+    locId = "CITY:SZ000001"
+  }
+  start = as.Date(paste(year, "-01-01", sep=""))
+  end = as.Date(paste(year + 1, "-02-01", sep=""))
+  out <- ncdc(datasetid="GSOY", datatypeid=c("TMAX","EMXP", "DX90", "DX32", "PRCP"),
+              startdate=start, enddate=end, add_units=TRUE)
+  out <- out$data
+  grouped_out <- out %>% group_by(date, datatype) %>% summarise(max=max(value, na.rm=TRUE))
+  cherry_df[row,"TMAX"]  = grouped_out[grouped_out$datatype=="TMAX",3]
+  cherry_df[row,"EMXP"]  = grouped_out[grouped_out$datatype=="EMXP",3]
+  cherry_df[row,"DX90"]  = grouped_out[grouped_out$datatype=="DX90",3]
+  cherry_df[row,"DX32"]  = grouped_out[grouped_out$datatype=="DX32",3]
+  cherry_df[row,"PRCP"]  = grouped_out[grouped_out$datatype=="PRCP",3]
+  
+}
+```
+
+
+
