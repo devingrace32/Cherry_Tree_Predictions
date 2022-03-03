@@ -5,6 +5,9 @@ date: "2/28/2022"
 output: pdf_document
 ---
 
+
+I am very aware that this is incredibly ugly code. This pdf is the result of several efforts in different directions and has somehow come together. 
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -12,18 +15,222 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r, include=FALSE}
 library(rnoaa)
 library(tidyverse)
-cherry <- read_csv("data/washingtondc.csv", col_types="cdddiDi") %>% 
-  bind_rows(read_csv("data/liestal.csv")) %>% 
-  bind_rows(read_csv("data/kyoto.csv"))
+library(tsbox)
+library(OOS)
+library(tsbox)
+library(scales)
+library(tidyverse) 
+library(forecast)
+library(fpp2)
+library(tseries)
+
+stations <- ghcnd_stations()
+cherry <- read_csv("C:/Users/devin/OneDrive/Documents/Cherry_Tree_Project/peak-bloom-prediction-main/peak-bloom-prediction-main/data/washingtondc.csv", col_types="cdddiDi") %>% 
+  bind_rows(read_csv("C:/Users/devin/OneDrive/Documents/Cherry_Tree_Project/peak-bloom-prediction-main/peak-bloom-prediction-main/data/liestal.csv")) %>% 
+  bind_rows(read_csv("C:/Users/devin/OneDrive/Documents/Cherry_Tree_Project/peak-bloom-prediction-main/peak-bloom-prediction-main/data/kyoto.csv"))
 
 options(noaakey = "NJxCCVZdtsfRurSAbUqXZBDOtWsSkoQK")
 
 locationIDs <- c("CITY:US000001", "CITY:SZ000001", "CITY:JA000008")
 ```
 
-```{r, include=FALSE}
-cherry_df <- data.frame(location = cherry$location, latitude = cherry$lat, longitude = cherry$long, year = cherry$year, altitude = cherry$alt, bloom_doy = cherry$bloom_doy)%>% filter(year>1960, year < 2022)
+```{r}
+cherry_df <- data.frame(location = cherry$location, latitude = cherry$lat, longitude = cherry$long, year = cherry$year, altitude = cherry$alt, bloom_doy = cherry$bloom_doy)%>% filter(year>1950, year < 2022)
+cherry_df$preface <- "1-1-"
+cherry_df$year <- as.Date(paste(cherry_df$preface,cherry_df$year), "%d-%m-%Y")
+
+
+lat_long <- distinct(data.frame(cbind(
+  id=cherry$location,
+  latitude=cherry$lat,
+  longitude=cherry$long)))
+
+#lets find the nearest stations to gather noaa data from
+nearby_stations <- meteo_nearby_stations(lat_long, station_data = stations,
+                                         radius=50, 
+                                         var=c("PRCP", "TMAX","TMIN","TAVG"), 
+                                         year_min=1950, year_max=1950)
+
+##Take from the airport
+dc_station_id <- nearby_stations$washingtondc[grep("REAGAN", nearby_stations$washingtondc$name),][[1]]
+
+##1901 -> 2022
+liestal_station_id <- filter(nearby_stations$liestal, distance == min(distance))[[1]]
+
+##1945 -> 2022
+kyoto_station_id <- filter(nearby_stations$kyoto, distance==min(distance))[[1]]
+cherry_df$jan_max_tmp <- NA
+cherry_df$feb_max_tmp <- NA
+cherry_df$nov_max_tmp <- NA
+cherry_df$dec_max_tmp <- NA
+cherry_df$mar_max_tmp <- NA
+
+dc_temps <- ghcnd_search(stationid=dc_station_id, var="TMAX")$tmax
+dc_temps <- data.frame(tmax=dc_temps$tmax, date=dc_temps$date)
+dc_temps$year <-format(dc_temps$date, "%Y")
+dc_temps$month <- format(dc_temps$date, "%m") 
+dc_temps <- dc_temps %>% filter(year>=1950, year < 2022)
+dc_grouped_tmps <- dc_temps %>% group_by(year,month) %>% 
+  summarise(max = max(tmax, na.rm=TRUE))
+  
+liestal_temps <- ghcnd_search(stationid=liestal_station_id, var="TMAX")$tmax
+liestal_temps <- data.frame(tmax=liestal_temps$tmax, date=liestal_temps$date)
+liestal_temps$year <-format(liestal_temps$date, "%Y")
+liestal_temps$month <- format(liestal_temps$date, "%m") 
+liestal_temps <- liestal_temps %>% filter(year>1950, year < 2022)
+liestal_grouped_tmps <- liestal_temps %>% group_by(year,month) %>% 
+  summarise(max = max(tmax, na.rm=TRUE))
+  
+kyoto_temps <- ghcnd_search(stationid=kyoto_station_id, var="TMAX")$tmax
+kyoto_temps <- data.frame(tmax=kyoto_temps$tmax, date=kyoto_temps$date)
+kyoto_temps$year <-format(kyoto_temps$date, "%Y")
+kyoto_temps$month <- format(kyoto_temps$date, "%m") 
+kyoto_temps <- kyoto_temps %>% filter(year>1950, year < 2022)
+kyoto_grouped_tmps <- kyoto_temps %>% group_by(year,month) %>% 
+  summarise(max = max(tmax, na.rm=TRUE))
+  
+for(row in 1:nrow(cherry_df)){
+  year1 <- cherry_df[row,4]
+  location <-cherry_df[row,1]
+  station <- dc_station_id
+  temps <- dc_grouped_tmps
+    
+  if(location == "kyoto"){
+    station <- kyoto_station_id
+    temps <- kyoto_grouped_tmps
+  }
+  if(location == "liestal"){
+    station <- liestal_station_id
+    temps <- liestal_grouped_tmps
+  }
+  row_of_choice <-  temps %>% filter(year==as.numeric(format(year1, format="%Y")), month=="01")
+  if(nrow(row_of_choice)!=0){
+    cherry_df$jan_max_tmp[row] <- row_of_choice$max
+  }
+  else{
+    cherry_df$jan_max_tmp[row]<- NA
+  }
+  
+  row_of_choice <-  temps %>%filter(year==as.numeric(format(year1, format="%Y")),month=="02" )
+  if(nrow(row_of_choice)!=0){
+    cherry_df$feb_max_tmp[row] <- row_of_choice$max
+  }
+  else{
+    cherry_df$feb_max_tmp[row]<- NA
+  }
+  
+  row_of_choice <-  temps %>% filter(year==as.numeric(format(year1, format="%Y")),month=="03" )
+  if(nrow(row_of_choice)!=0){
+    cherry_df$mar_max_tmp[row] <- row_of_choice$max
+  }
+  else{
+    cherry_df$mar_max_tmp[row]<- NA
+  }
+  
+  row_of_choice <-  temps %>% filter(year==as.numeric(format(year1, format="%Y")) - 1,month=="11" )
+  if(nrow(row_of_choice)!=0){
+    cherry_df$nov_max_tmp[row] <- row_of_choice$max
+  }
+  else{
+    cherry_df$nov_max_tmp[row]<- NA
+  }
+  
+  row_of_choice <-  temps %>% filter(year==as.numeric(format(year1, format="%Y")) - 1,month=="12" )
+  if(nrow(row_of_choice)!=0){
+    cherry_df$dec_max_tmp[row] <- row_of_choice$max
+  }
+  else{
+    cherry_df$dec_max_tmp[row]<- NA
+  }
+}
+
+
+cherry_df$jan_min_tmp <- NA
+cherry_df$feb_min_tmp <- NA
+cherry_df$nov_min_tmp <- NA
+cherry_df$dec_min_tmp <- NA
+cherry_df$mar_min_tmp <- NA
+
+dc_temps <- ghcnd_search(stationid=dc_station_id, var="TMIN")$tmin
+dc_temps <- data.frame(tmin=dc_temps$tmin, date=dc_temps$date)
+dc_temps$year <-format(dc_temps$date, "%Y")
+dc_temps$month <- format(dc_temps$date, "%m") 
+dc_temps <- dc_temps %>% filter(year>=1950, year < 2022)
+dc_grouped_tmps <- dc_temps %>% group_by(year,month) %>% 
+  summarise(min = min(tmin, na.rm=TRUE))
+  
+liestal_temps <- ghcnd_search(stationid=liestal_station_id, var="TMIN")$tmin
+liestal_temps <- data.frame(tmin=liestal_temps$tmin, date=liestal_temps$date)
+liestal_temps$year <-format(liestal_temps$date, "%Y")
+liestal_temps$month <- format(liestal_temps$date, "%m") 
+liestal_temps <- liestal_temps %>% filter(year>1950, year < 2022)
+liestal_grouped_tmps <- liestal_temps %>% group_by(year,month) %>% 
+  summarise(min = min(tmin, na.rm=TRUE))
+
+kyoto_temps <- ghcnd_search(stationid=kyoto_station_id, var="TMIN")$tmin
+kyoto_temps <- data.frame(tmin=kyoto_temps$tmin, date=kyoto_temps$date)
+kyoto_temps$year <-format(kyoto_temps$date, "%Y")
+kyoto_temps$month <- format(kyoto_temps$date, "%m") 
+kyoto_temps <- kyoto_temps %>% filter(year>1950, year < 2022)
+kyoto_grouped_tmps <- kyoto_temps %>% group_by(year,month) %>% 
+  summarise(min = min(tmin, na.rm=TRUE))
+  
+for(row in 1:nrow(cherry_df)){
+  year1 <- cherry_df[row,4]
+  location <-cherry_df[row,1]
+  station <- dc_station_id
+  temps <- dc_grouped_tmps
+    
+  if(location == "kyoto"){
+    station <- kyoto_station_id
+    temps <- kyoto_grouped_tmps
+  }
+  if(location == "liestal"){
+    station <- liestal_station_id
+    temps <- liestal_grouped_tmps
+  }
+  row_of_choice <-  temps %>% filter(year==format(year1, format="%Y"),month=="01" )
+  if(nrow(row_of_choice)!=0){
+    cherry_df$jan_min_tmp[row] <- row_of_choice$min
+  }
+  else{
+    cherry_df$jan_min_tmp[row]<- NA
+  }
+  
+  row_of_choice <-  temps %>% filter(year==format(year1, format="%Y"),month=="02" )
+  if(nrow(row_of_choice)!=0){
+    cherry_df$feb_min_tmp[row] <- row_of_choice$min
+  }
+  else{
+    cherry_df$feb_min_tmp[row]<- NA
+  }
+  
+  row_of_choice <-  temps %>% filter(year==format(year1, format="%Y"),month=="03" )
+  if(nrow(row_of_choice)!=0){
+    cherry_df$mar_min_tmp[row] <- row_of_choice$min
+  }
+  else{
+    cherry_df$mar_min_tmp[row]<- NA
+  }
+  
+  row_of_choice <-  temps %>% filter(year==as.numeric(format(year1, format="%Y")) - 1,month=="11")
+  if(nrow(row_of_choice)!=0){
+    cherry_df$nov_min_tmp[row] <- row_of_choice$min
+  }
+  else{
+    cherry_df$nov_min_tmp[row]<- NA
+  }
+  
+  row_of_choice <-  temps %>% filter(year==as.numeric(format(year1, format="%Y")) - 1,month=="12" )
+  if(nrow(row_of_choice)!=0){
+    cherry_df$dec_min_tmp[row] <- row_of_choice$min
+  }
+  else{
+    cherry_df$dec_min_tmp[row]<- NA
+  }
+}
 ```
+
 ```{r}
 out <-ncdc(datasetid="GSOY", datatypeid=c("TMAX","EMXP", "DX90", "DX32", "PRCP"), locationid="CITY:US000001", startdate="2004-01-01", enddate="2005-02-01", add_units = TRUE)
 kyoto <- out$data[,1:4]
@@ -34,8 +241,8 @@ tst <- grouped_kyoto[grouped_kyoto$datatype == "TMAX",3]
 ```{r}
 cherry_df[,c("TMAX","EMXP", "DX90", "DX32", "PRCP")] = NA
 
-for(row in 1:nrow(cherry_df)){
-  year <- cherry_df[row,4]
+for(row in 1:(nrow(cherry_df)-1)){
+  year <- format(cherry_df[row,4] ,"%Y")
   locId = "CITY:US000001"
   if(cherry_df[row,1] == "kyoto"){
     locId = "CITY:JA000008"
@@ -44,19 +251,90 @@ for(row in 1:nrow(cherry_df)){
     locId = "CITY:SZ000001"
   }
   start = as.Date(paste(year, "-01-01", sep=""))
-  end = as.Date(paste(year + 1, "-02-01", sep=""))
-  out <- ncdc(datasetid="GSOY", datatypeid=c("TMAX","EMXP", "DX90", "DX32", "PRCP"),
-              startdate=start, enddate=end, add_units=TRUE)
+  end = as.Date(paste(as.numeric(year) + 1, "-02-01", sep=""))
+  out <- ncdc(datasetid="GSOY",locationid=locId, datatypeid=c("TMAX","EMXP", "DX90", "DX32", "PRCP"),
+              startdate=start, enddate=end)
+  if(!is.null(out$data)){
   out <- out$data
-  grouped_out <- out %>% group_by(date, datatype) %>% summarise(max=max(value, na.rm=TRUE))
-  cherry_df[row,"TMAX"]  = grouped_out[grouped_out$datatype=="TMAX",3]
-  cherry_df[row,"EMXP"]  = grouped_out[grouped_out$datatype=="EMXP",3]
-  cherry_df[row,"DX90"]  = grouped_out[grouped_out$datatype=="DX90",3]
-  cherry_df[row,"DX32"]  = grouped_out[grouped_out$datatype=="DX32",3]
-  cherry_df[row,"PRCP"]  = grouped_out[grouped_out$datatype=="PRCP",3]
-  
+  grouped_out <- out %>% group_by(date, datatype) %>% summarise(avg=mean(value, na.rm=TRUE))
+  if(nrow(grouped_out[grouped_out$datatype=="TMAX",3]) != 0){
+    cherry_df[row,"TMAX"]  = grouped_out[grouped_out$datatype=="TMAX",3][1,1]}
+  if(nrow(grouped_out[grouped_out$datatype=="EMXP",3]) != 0){
+    cherry_df[row,"EMXP"]  = grouped_out[grouped_out$datatype=="EMXP",3][1,1]}
+  if(nrow(grouped_out[grouped_out$datatype=="DX90",3]) != 0){
+    cherry_df[row,"DX90"]  = grouped_out[grouped_out$datatype=="DX90",3][1,1]}
+  if(nrow(grouped_out[grouped_out$datatype=="DX32",3]) != 0){
+    cherry_df[row,"DX32"]  = grouped_out[grouped_out$datatype=="DX32",3][1,1]}
+  if(nrow(grouped_out[grouped_out$datatype=="PRCP",3]) != 0){
+    cherry_df[row,"PRCP"]  = grouped_out[grouped_out$datatype=="PRCP",3][1,1]}
+  }
+  else{
+    cherry_df[row,"TMAX"] = NA
+    cherry_df[row,"EMXP"] = NA
+    cherry_df[row,"DX90"] = NA
+    cherry_df[row, "DX32"] = NA
+    cherry_df[row, "PRCP"] = NA
+    
+  }
 }
 ```
 
 
+
+
+
+
+```{r}
+cherry_df <- cherry_df %>% fill(names(cherry_df), .direction="down") %>%rename(date="year")
+#reseparate into cities
+kyoto <- cherry_df %>% filter(location=="kyoto") %>% select(-c("altitude", "longitude", "latitude", "location", "preface"))
+kyoto_ts <- kyoto %>% select(bloom_doy)
+kyoto_ts <- ts(kyoto_ts)
+
+dc <- cherry_df %>% filter(location=="washingtondc")%>% select(-c("altitude", "longitude", "latitude", "location", "preface"))
+dc_ts <- dc %>% select(bloom_doy)
+dc_ts <- ts(dc_ts)
+
+liestal <- cherry_df %>% filter(location=="liestal") %>% select(-c("altitude", "longitude", "latitude", "location", "preface"))
+liestal_ts <- liestal %>% select(bloom_doy)
+liestal_ts <- ts(liestal_ts)
+
+```
+
+
+
+```{r}
+
+  
+msft_ar <- auto.arima(kyoto_ts, trace = TRUE,
+                            seasonal= FALSE,
+                            stepwise=FALSE,
+                            approximation=FALSE)
+msft_ar1 <- auto.arima(dc_ts, trace = TRUE,
+                            seasonal= FALSE,
+                            stepwise=FALSE,
+                            approximation=FALSE)
+msft_ar2 <- auto.arima(liestal_ts, trace = TRUE,
+                            seasonal= FALSE,
+                            stepwise=FALSE,
+                            approximation=FALSE)
+
+
+
+kyoto_pred <- predict(msft_ar, n.ahead=10)$pred
+
+dc_pred <- predict(msft_ar1, n.ahead=10)$pred
+
+liestal_pred <- predict(msft_ar2, n.ahead=10)$pred
+
+##FORMAT DATA
+##output <- data.frame(year= 2022:2031, 
+  #                   kyoto = round(kyoto_pred), 
+   #                  liestal=round(liestal_pred), 
+    #                 washingtondc=round(dc_pred), 
+     #                vancouver=NA)
+           
+#output$vancouver <- round(mean(c(output$kyoto,output$liestal,output$washingtondc)))
+#write.csv(output, "C:/Users/devin/OneDrive/Documents/output.csv", row.names=FALSE)'''
+```
 
